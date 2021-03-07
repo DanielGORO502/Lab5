@@ -1,0 +1,341 @@
+; Archvo:	Lab5 
+; Dispositivo:	PIC16F887
+; Autor:	Daniel González 
+; Carnet:	171506
+; Compilador:	pic-as (v2.30), MPLABX v5.40
+;    
+; Programa:	Displays Simultaneos
+; Hardware:	Displays de 7 Segmentos multiplexados para desplegar valor contador    
+; Creado: Marzo, 2021
+; Ultima modificación: 07 Marzo, 2021
+;-------------------------------------------------------------------------------
+PROCESSOR 16F887
+#include <xc.inc>
+
+; configuración word1
+ CONFIG FOSC=INTRC_NOCLKOUT //Oscilador interno sin salidas
+ CONFIG WDTE=OFF	    //WDT disabled (reinicio repetitivo del pic)
+ CONFIG PWRTE=ON	    //PWRT enabled (espera de 72ms al iniciar
+ CONFIG MCLRE=OFF	    //pin MCLR se utiliza como I/O
+ CONFIG CP=OFF		    //sin protección de código
+ CONFIG CPD=OFF		    //sin protección de datos
+ 
+ CONFIG BOREN=OFF	    //sin reinicio cuando el voltaje baja de 4v
+ CONFIG IESO=OFF	    //Reinicio sin cambio de reloj de interno a externo
+ CONFIG FCMEN=OFF	    //Cambio de reloj externo a interno en caso de falla
+ CONFIG LVP=ON		    //Programación en bajo voltaje permitida
+ 
+;configuración word2
+  CONFIG WRT=OFF	    //Protección de autoescritura 
+  CONFIG BOR4V=BOR40V	    //Reinicio abajo de 4V 
+
+ UP	EQU 0		;Pin de boton de incremento 
+DOWN	EQU 1		;Pin de boton de decremento
+	
+Reinicio_TMR0 macro	;Función para todo el código diferente a una etiqueta
+    banksel TMR0	;Para asignarle un valor al TMR0
+    movlw   217		;Valor de TMR0
+    movwf   TMR0	
+    bcf	    T0IF	;Limpieza para la bandera
+    endm		;Finalizamos el macro
+    
+  PSECT udata_bank0	;common memory
+    VAR:	DS  1	;Para el valor binario
+    VAR_DISPLAY:DS  2	;Para el valor del display 1 Hexadecimal
+    VAR_DISP2:  DS  2	;Para el valor del display 2 hexadecimal
+    BANDERAS:	DS  1	;Para seleción de display
+    NIBBLE:	DS  2	;Para el nibble de var.
+    CENTENA:	DS  1	;Para el val de centenas del valor V1
+    CENTENA1:	DS  1	;Para el val de centenas del DISPLAY
+    DECENA:	DS  1	;Para el val de decenas del valor V1
+    DECENA1:	DS  1	;Para el val de decenas del DISPLAY
+    UNIDAD:	DS  1	;Para el val de unidad del valor V1
+    UNIDAD1:	DS  1	;Para el val de unidad del DISPLAY
+    V1:		DS  1	;Para el valor del numero en centenas, decenas, unidades.
+    
+  PSECT udata_shr ;common memory
+    w_temp:	DS  1	    ;Para guardar un valor en 1 byte apartado siendo temporal
+    STATUS_TEMP:DS  1	    ;Para guardar un valor en 1 byte en estatus temporal 
+  
+  PSECT resVect, class=CODE, abs, delta=2
+  
+  ;---------------------------vector reset-------------------------------------
+  
+  ORG 00h	;posición 000h para el reset
+  resetVec:
+    PAGESEL main
+    goto main
+    
+  PSECT intVect, class=CODE, abs, delta=2
+  
+  ;---------------------------interripción reset--------------------------------
+  
+  ORG 04h	;posición 0004h para interr
+  
+  Push:
+    movf    w_temp	    ;Se asegura el valor actual de W
+    swapf   STATUS, W	    ;Se utiliza para el cambio de valor del estatud y asignarlo a w
+    movwf   STATUS_TEMP	    ;Es para guardar el valor del Estatus invertido a la variable temporal del estatus
+    
+  Isr:
+    btfsc   RBIF	    ;Para verificar el estado de la bandera del TMR0
+    call    Veri_Pul	    ;Si la bandera esta levantada se llama a INT_TMR0
+    
+    btfsc   T0IF	    ;Se verifica que la bandera de interrupción este levantada
+    call    INT_TMR0	    ;Verifica que la bandera este levantada y si se llama a INT_IOCB
+    
+  Pop:
+    swapf   STATUS_TEMP, W  ;Se invierte el valor del STATUS_TEMP y se asigna a W
+    movwf   STATUS	    ;Se le asigna valor de W al estatus
+    swapf   w_temp, F
+    swapf   w_temp, W
+    retfie
+    
+;--------------------------SubrutinasInterrupción-------------------------------
+    
+Veri_Pul:
+    banksel PORTB	    ;Para seleccionar el Bank 00
+    btfss   PORTB, UP	    ;Es para verificar el estatus del Boton de incremento
+    incf    PORTA	    ;Para el incremento del PORTA
+    btfss   PORTB, DOWN	    ;Es para verificar el estatus del boton de decremento 
+    decf    PORTA	    ;Para el decremento del PORTA
+    bcf	    RBIF	    ;Sirve para limpiar la bandera RBIF
+    return
+    
+INT_TMR0:
+    Reinicio_TMR0	    
+    bcf     STATUS, 0	    ;Verifica el Estatus
+    clrf    PORTB	    ;Sirve para limpiar el PORTB
+    btfsc   BANDERAS, 1	    ;Para verificar las el valor para encender el display1
+    goto    DISPLAY0	    ;Va a la subrutina del display
+    btfsc   BANDERAS, 2	    ;Verifica el valor para encender el display2
+    goto    DISPLAY1	    ;Va a la subrutina del display
+    btfsc   BANDERAS, 3	    ;Se verifica si se enciende el display3
+    goto    DISPLAYCENTENA  ;Va a la subrutina de centenas
+    btfsc   BANDERAS, 4	    ;Se verifica si enciende el display4 
+    goto    DISPLAYDECENA   ;Va a la subrutina de decenas
+    btfsc   BANDERAS, 5	    ;Se verifica si se enciende el dispklay5
+    goto    DISPLAYUNIDAD   ;Va a la subrutina de unidades
+    movlw   00000001B	    ;Es para cambiar el valor con 1 a W
+    movwf   BANDERAS	    ;Cambia el valor de 1 a la posicion 0
+    
+SIGUIENTEDISPLAY:
+    RLF	    BANDERAS, 1	    ;Se mueve una posición 
+    return		    ;Para el otro display
+    
+DISPLAY0:
+    movf    VAR_DISPLAY, w  ;Para mover el valor del dispaly a W
+    movwf   PORTC	    ;Mueve el valor del display al PORTC
+    bsf	    PORTB, 2	    ;Activa el valor del para el display del PORTC
+    goto    SIGUIENTEDISPLAY ;Va a la subrutina del siguientediusplay	
+    
+    ;Repetimos el proceso con los displays y los valores de DECENAS / CENTENAS / UNIDADES
+    
+DISPLAY1:
+    movf    VAR_DISP2, w
+    movwf   PORTC
+    bsf	    PORTB, 3
+    goto    SIGUIENTEDISPLAY
+    
+DISPLAYCENTENA: 
+    movf    CENTENA1, w
+    movwf   PORTD
+    bsf	    PORTB, 4
+    goto    SIGUIENTEDISPLAY
+    
+DISPLAYDECENA:
+    movf    DECENA1, w
+    movwf   PORTD
+    bsf	    PORTB, 5
+    goto    SIGUIENTEDISPLAY
+    
+DISPLAYUNIDAD:
+    movf    UNIDAD1, w 
+    movwf   PORTD
+    bsf	    PORTB,6
+    goto    SIGUIENTEDISPLAY
+    
+  PSECT code, delta=2, abs
+  ORG 100h	;Posición para el código
+  
+ ;-------------------------Tabla valores Display--------------------------------
+ 
+  Tabla:
+    clrf  PCLATH
+    bsf   PCLATH,0
+    andlw 0x0F
+    addwf PCL
+    retlw 00111111B          ; 0
+    retlw 00000110B          ; 1
+    retlw 01011011B          ; 2
+    retlw 01001111B          ; 3
+    retlw 01100110B          ; 4
+    retlw 01101101B          ; 5
+    retlw 01111101B          ; 6
+    retlw 00000111B          ; 7
+    retlw 01111111B          ; 8
+    retlw 01101111B          ; 9
+    retlw 01110111B          ; A
+    retlw 01111100B          ; b
+    retlw 00111001B          ; C
+    retlw 01011110B          ; d
+    retlw 01111001B          ; E
+    retlw 01110001B          ; F
+ 
+;---------------------------Comfiguración del Main------------------------------
+  main: 
+    call    config_io		
+    call    config_reloj
+    call    config_IOChange
+    call    config_tmr0
+    call    config_InterrupEnable  
+    banksel PORTA 
+    
+;------------------------------------LOOP --------------------------------------
+    
+ loop:
+    movf    PORTA, w	    ;Se mueve el valor del contador a W
+    movwf   VAR		    ;Para mover el valor de W a VAR
+    movwf   V1		    ;Para mover el valor de W a V1
+    
+    call    separar_nibbles ;Llama a subrutina
+    call    config_displays 
+    call    Centenas
+    call    displaydecimal
+
+    goto    loop    ;loop se repite
+    
+;---------------------------------Sub rutinas-----------------------------------
+    
+displaydecimal:
+    movf    CENTENA, w	;Movemos el valor de centenasa W
+    call    Tabla	;Verificamos el valor de la tabla
+    movwf   CENTENA1	
+    movf    DECENA, w	;Movemos el valor de decenas a w
+    call    Tabla	;Varificamos el valor de la tabla
+    movwf   DECENA1
+    movf    UNIDAD, w	;Movemos el valor de unidad a W
+    call    Tabla	;Verificamos el valor de la tabla
+    movwf   UNIDAD1 
+    return
+    
+UNIDADES:
+    clrf    UNIDAD	;Para limpiar la variable
+    movlw   00001010B	;Se le asigna un valor a W
+    addwf   V1		;Se le suma el valor a V1 
+    movlw   00000001B	;Se le va asignando el valor A w
+    subwf   V1,1	;Se resta 1 A W
+    btfss   STATUS, 0	;Se verifica el estado de la resta
+    return
+    incf    UNIDAD, 1	;Se incrementa a unidades
+    goto    $-5
+    
+DECENAS:
+    clrf    DECENA	;Para limpiar la variable
+    movlw   01100100B	;Se le asigna un valor a W
+    addwf   V1		;Se le suma el valor a V1
+    movlw   00001010B	;Se le va asignando el valor A w
+    subwf   V1,1	;Se resta 1 A W
+    btfss   STATUS,0	;Se verifica el estado de la resta
+    goto    UNIDADES	;Se verifica que la resta sea negaticva para enviar a unidades
+    incf    DECENA, 1	;Se incrementa el valor de decenas
+    goto    $-5		;Verifica la 5 linea
+ 
+Centenas:
+    clrf    CENTENA	;Para limpiar la variable
+    movlw   01100100B   ;ASIGNAMOS EL VALOR DE "100" W
+    subwf   V1, 1       ;Resta de W DE F
+    btfss   STATUS,0	;Se verifica el valor del estatus
+    goto    DECENAS	;Se regresa a decenas
+    incf    CENTENA, 1	;incrementa el valor decentenas 
+    goto    $-5
+    
+separar_nibbles:
+    movf    VAR, w	;Mueve el valor del nibble a W
+    andlw   0x0f
+    movwf   NIBBLE	;Mueve el valor de W a Nibblr
+    swapf   VAR, w	
+    andlw   0x0f	
+    movwf   NIBBLE+1	
+    return
+    
+config_displays:
+    movf    NIBBLE, w	;Mueve el valor del Nibble a W
+    call    Tabla	;Vaerifica el valor de la tabla
+    movwf   VAR_DISPLAY	;Mueve el valor de w ala variable del display
+    movf    NIBBLE+1, w	
+    call    Tabla	;Llama al valor de la tabla
+    movwf   VAR_DISP2	;Mueve el valor de W a la variable del display 2
+    return
+    
+config_IOChange:
+    banksel TRISA
+    bsf	    IOCB, UP
+    bsf	    IOCB, DOWN 
+    
+    banksel PORTA
+    movf    PORTB, W	;Condición mismatch
+    bcf	    RBIF
+    return
+    
+config_io:
+    bsf	    STATUS, 5   ;banco  11
+    bsf	    STATUS, 6	;Banksel ANSEL
+    clrf    ANSEL	;pines digitales
+    clrf    ANSELH
+    
+    bsf	    STATUS, 5	;banco 01
+    bcf	    STATUS, 6	;Banksel TRISA
+    clrf    TRISA	;PORTA A salida
+    clrf    TRISC
+    clrf    TRISD
+    bsf	    TRISB, UP
+    bsf	    TRISB, DOWN
+    bcf	    TRISB, 2
+    bcf	    TRISB, 3
+    bcf	    TRISB, 4
+    bcf	    TRISB, 5
+    bcf	    TRISB, 6
+   
+    
+    bcf	    OPTION_REG,	7   ;RBPU Enable bit - Habilitar
+    bsf	    WPUB, UP
+    bsf	    WPUB, DOWN
+    
+    bcf	    STATUS, 5	;banco 00
+    bcf	    STATUS, 6	;Banksel PORTA
+    clrf    PORTA	;Valor incial 0 en puerto A
+    clrf    PORTC
+    clrf    PORTD
+    return
+     
+ config_tmr0:
+    banksel OPTION_REG  ;Banco de registros asociadas al puerto A
+    bcf	    T0CS	;reloj interno clock selection
+    bcf	    PSA		;Prescaler 
+    bsf	    PS2
+    bsf	    PS1
+    bsf	    PS0		 ;PS = 111 Tiempo en ejecutar , 256
+    
+    Reinicio_TMR0	 ;Macro reiniciar tmr0
+    return  
+    
+ config_reloj:
+    banksel OSCCON	;Banco OSCCON 
+    bsf	    IRCF2	;OSCCON configuración bit2 IRCF
+    bsf	    IRCF1	;OSCCON configuracuón bit1 IRCF
+    bcf	    IRCF0	;OSCCON configuración bit0 IRCF
+    bsf	    SCS		;reloj interno , 4Mhz
+    return
+
+config_InterrupEnable:
+    bsf	    GIE		;Habilitar en general las interrupciones, Globales
+    bsf	    RBIE	;Se encuentran en INTCON
+    bcf	    RBIF	;Limpiamos bandera
+    bsf	    T0IE
+    bcf	    T0IF
+    return
+ 
+end
+
+
